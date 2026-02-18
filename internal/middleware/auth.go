@@ -1,0 +1,56 @@
+package middleware
+
+import (
+	"net/http"
+	"strings"
+
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/labstack/echo/v4"
+)
+
+type JWTClaims struct {
+	UserID string `json:"user_id"`
+	Email  string `json:"email"`
+	// "customer" | "business_owner"
+	Role string `json:"role"`
+	jwt.RegisteredClaims
+}
+
+const claimsKey = "claims"
+
+// JWT returns an Echo middleware that validates Bearer tokens.
+func JWT(secret string) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			authHeader := c.Request().Header.Get("Authorization")
+			if authHeader == "" {
+				return echo.NewHTTPError(http.StatusUnauthorized, "missing authorization header")
+			}
+
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
+				return echo.NewHTTPError(http.StatusUnauthorized, "authorization header must be: Bearer <token>")
+			}
+
+			claims := &JWTClaims{}
+			token, err := jwt.ParseWithClaims(parts[1], claims, func(t *jwt.Token) (interface{}, error) {
+				if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+					return nil, echo.NewHTTPError(http.StatusUnauthorized, "unexpected signing method")
+				}
+				return []byte(secret), nil
+			})
+			if err != nil || !token.Valid {
+				return echo.NewHTTPError(http.StatusUnauthorized, "invalid or expired token")
+			}
+
+			c.Set(claimsKey, claims)
+			return next(c)
+		}
+	}
+}
+
+// GetClaims extracts the JWT claims stored by the JWT middleware.
+func GetClaims(c echo.Context) *JWTClaims {
+	claims, _ := c.Get(claimsKey).(*JWTClaims)
+	return claims
+}
